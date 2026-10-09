@@ -1,0 +1,9 @@
+{
+  "current_condition": [
+    {
+      "temp_C": "26",
+      "weatherDesc": [{"value": "Partly cloudy"}],
+      "lang_zh": [{"value": "多云"}]
+    }
+  ]
+}

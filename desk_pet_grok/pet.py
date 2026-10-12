@@ -28,6 +28,8 @@ _ANIM_INTERVAL_MS = 16  # ~60 fps procedural layer
 _WALK_FRAME_MS = 90  # walk cycle cadence
 _TURN_FRAME_MS = 56  # front↔side turn (~0.3s for 5 clean keys)
 _MOVE_SPEED_MIN = 2.0
+_WALK_CYCLE_HEIGHTS = 0.55  # ground distance of one full cycle (2 steps) in sprite heights
+_WALK_MIN_CYCLES_PER_S = 0.4  # never freeze the cycle at very low speed (frame-count independent)
 
 
 def assets_root_default() -> Path:
@@ -159,6 +161,7 @@ class PetWidget(QWidget):
         self._sprites: dict[str, QPixmap] = {}
         self._walk_frames: list[QPixmap] = []
         self._walk_index = 0
+        self._walk_phase = 0.0
         self._turn_frames: list[QPixmap] = []
         self._turn_index = 0
         self._turn_dir = 0  # +1 front→side, -1 side→front, 0 idle
@@ -181,7 +184,7 @@ class PetWidget(QWidget):
 
         self._walk_timer = QTimer(self)
         self._walk_timer.setInterval(_WALK_FRAME_MS)
-        self._walk_timer.timeout.connect(self._advance_walk)
+        # Phase is driven by _tick_anim from ground speed (see _step_walk_phase).
 
         self._turn_timer = QTimer(self)
         self._turn_timer.setInterval(_TURN_FRAME_MS)
@@ -313,6 +316,7 @@ class PetWidget(QWidget):
                 self._sprite_mode = "walk"
                 self._anim.set_walk_frames_active(True)
                 self._walk_index = 0
+                self._walk_phase = 0.0
                 if not self._walk_timer.isActive():
                     self._walk_timer.start()
             elif "side" in self._sprites:
@@ -447,8 +451,21 @@ class PetWidget(QWidget):
         n = len(self._walk_frames)
         if n <= 1:
             return
-        self._walk_index = (self._walk_index + 1) % n
+        # Fallback fixed cadence (unused while the anim tick drives phase).
+        self._walk_phase = (self._walk_phase + 1.0) % n
+        self._walk_index = int(self._walk_phase) % n
         self.update()
+
+    def _step_walk_phase(self, dt: float) -> None:
+        """Advance walk cycle by ground distance so feet match speed (no skating)."""
+        n = len(self._walk_frames)
+        if self._sprite_mode != "walk" or n <= 1:
+            return
+        cycle_px = max(1.0, _WALK_CYCLE_HEIGHTS * self.height())
+        fps = (self._speed / cycle_px) * n
+        fps = max(fps, _WALK_MIN_CYCLES_PER_S * n)
+        self._walk_phase = (self._walk_phase + fps * dt) % n
+        self._walk_index = int(self._walk_phase) % n
 
     def _advance_turn(self) -> None:
         if not self._turn_frames or self._turn_dir == 0:
@@ -470,6 +487,7 @@ class PetWidget(QWidget):
         elapsed_ms = self._anim_clock.restart()
         dt = max(0.001, min(elapsed_ms / 1000.0, 0.1))
         self._anim.tick(dt)
+        self._step_walk_phase(dt)
         self.update()
 
     def _current_pixmap(self) -> QPixmap | None:

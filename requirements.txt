@@ -2,3 +2,4 @@ PySide6>=6.6
 httpx>=0.27
 psutil>=5.9
 pytest>=8.0
+# macOS: no extra package needed (desk_pet_grok/macwin.py talks to AppKit via ctypes). Optional: pyobjc-framework-Cocoa; sys_platform == "darwin"

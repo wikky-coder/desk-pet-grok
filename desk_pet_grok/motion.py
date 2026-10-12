@@ -22,12 +22,12 @@ _MARGIN = 24.0
 _WANDER_SPEED = 65.0  # px/s cruise
 _WANDER_ARRIVE = 14.0  # settle into rest inside this radius
 _WANDER_SLOW_RADIUS = 70.0  # ease-out starts here
-_WANDER_REST_MIN = 1.2
-_WANDER_REST_MAX = 3.5
+_WANDER_REST_MIN = 25.0
+_WANDER_REST_MAX = 60.0
 _WANDER_ACCEL = 2.4  # ease-in toward desired velocity
 _WANDER_MAX_TURN_DEG = 120.0  # deg/s heading change cap
-_WANDER_HOP_MIN = 90.0
-_WANDER_HOP_MAX = 240.0
+_WANDER_HOP_MIN = 60.0
+_WANDER_HOP_MAX = 150.0
 _WANDER_MAX_DY = 40.0  # prefer mostly-horizontal hops
 _WANDER_REST_DAMP = 5.5  # 1/s velocity decay while resting
 # Facing hysteresis (avoid flicker on tiny vx wobble)
@@ -65,11 +65,20 @@ class MotionController:
         self._rng = rng if rng is not None else random.Random()
         self._target: tuple[float, float] | None = None
         self._rest_left = 0.0
+        self.flat = False
         self._heading: float | None = None  # radians; None until first steer
         self._face_pending: int | None = None
         self._face_hold = 0.0
         self._last_x: float | None = None
         self._last_y: float | None = None
+
+    def release(self) -> None:
+        """After a drag: forget the old target and resume wandering from here."""
+        self._target = None
+        self._heading = None
+        self.vx = 0.0
+        self.vy = 0.0
+        self._rest_left = 0.8
 
     def set_mode(self, mode: MotionMode | str) -> None:
         self.mode = parse_mode(mode)
@@ -205,6 +214,8 @@ class MotionController:
 
         if self._target is None:
             self._target = self._pick_target(x, y, w, h, sx, sy, sw, sh)
+            if self.flat:  # ground-walking puppet: horizontal strolls only
+                self._target = (self._target[0], y)
 
         tx, ty = self._target
         dx = tx - x

@@ -26,7 +26,11 @@ def test_system_prompt_exact():
     expected = (
         "你是用户桌面上的助手，通过 xAI API 被本机桌宠调用。\n"
         "用用户正在用的语言回答，默认中文。\n"
-        "桌面气泡最多 80 个汉字或 160 个英文字符；用户明确要求展开时再写长。\n"
+        "你是一只金发猫娘女仆，名叫小 Grok。自称「本喵」，偶尔也用「Wiki」称呼自己；称呼用户为「主人」。\n"
+        "说话软萌、简短、口语化，像在耳边轻声说；颜文字只偶尔用，认真问题先把答案说清楚。\n"
+        "不涉及任何暧昧或亲密内容，保持女仆式的体贴与分寸。\n"
+        "每一句话都以「喵」结尾（放在句末标点之前，例如「好的喵。」「要不要试试喵？」），包括列表项和问句；代码块、命令和链接除外。\n"
+        "桌面气泡最多 80 个汉字或 160 个英文字符，尽量每句不超过 24 个字；用户明确要求展开时再写长。\n"
         "不要声称自己是 Grok 网页、Grok App 或 Grok Bot 里的同一个会话。\n"
         "不要编造已经执行过的本机操作。只有工具结果里写了成功，才能说做过。\n"
         "不要索要 API Key。"
@@ -88,3 +92,10 @@ def test_truncate_for_bubble_ascii_about_160():
 def test_truncate_short_unchanged():
     assert truncate_for_bubble("你好") == "你好"
     assert truncate_for_bubble("hello") == "hello"
+
+
+def test_messages_end_with_meow():
+    from desk_pet_grok.chat import MSG_CANCELLED, MSG_NO_KEY, MSG_THINKING
+    from desk_pet_grok.meow import ends_with_meow
+    for m in (MSG_AUTH, MSG_GENERIC, MSG_RATE, MSG_TIMEOUT, MSG_CANCELLED, MSG_NO_KEY, MSG_THINKING):
+        assert ends_with_meow(m), m

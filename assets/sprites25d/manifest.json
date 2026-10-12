@@ -1,0 +1,68 @@
+{
+ "canvas": [
+  360,
+  470
+ ],
+ "anchor": [
+  180,
+  458
+ ],
+ "clips": {
+  "turn_out": {
+   "sheet": "turn_out.png",
+   "frames": 75,
+   "cols": 10,
+   "fw": 360,
+   "fh": 470,
+   "fps": 30,
+   "loop": false
+  },
+  "idle_front": {
+   "sheet": "idle_front.png",
+   "frames": 48,
+   "cols": 10,
+   "fw": 360,
+   "fh": 470,
+   "fps": 15,
+   "loop": true
+  },
+  "walk_side": {
+   "sheet": "walk_side.png",
+   "frames": 48,
+   "cols": 10,
+   "fw": 360,
+   "fh": 470,
+   "fps": 30,
+   "loop": true
+  }
+ },
+ "walk_scale": 0.5192320423700761,
+ "walk_rest_frames": [
+  0
+ ],
+ "stride_px_per_frame": 0.8437520688513738,
+ "walk_enter_frame": 0,
+ "native_facing": -1,
+ "idle_turn_ok": [
+  4,
+  5,
+  6,
+  7,
+  8,
+  9
+ ],
+ "idle_flick": {
+  "sheet": "idle_flick.png",
+  "cols": 6,
+  "frames_per_variant": 6,
+  "variants": [
+   "left",
+   "right",
+   "both"
+  ],
+  "fw": 360,
+  "fh": 470,
+  "fps": 15,
+  "start_frame": 0
+ }
+}

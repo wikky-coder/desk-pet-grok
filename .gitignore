@@ -5,7 +5,28 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.DS_Store
+**/.DS_Store
 
+# regenerable / scratch
 _gen/
+_gen25d/
+_gen3d/
+_bak_*/
+*.bak
+*.bak[0-9]
+*.bak*
+_archives/
 assets/sprites/*.prev.png
+assets/rig25d.bak/
 .secrets/
+*.tgz
+*.tar.gz
+
+# local runtime (never commit)
+settings.json
+memory.json
+**/xai_api_key
+xai_api_key
+.env
+.env.*

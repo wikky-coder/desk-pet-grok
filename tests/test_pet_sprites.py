@@ -298,3 +298,28 @@ def test_window_mask_key_tracks_pose(qapp: QApplication, tmp_path: Path) -> None
     assert pet._mask_key is not None
     assert pet._mask_key[0] == "walk"
     assert pet._mask_key != front_key
+
+
+def test_walk_phase_scales_with_speed(qapp: QApplication, tmp_path: Path) -> None:
+    _write_tiny_png(tmp_path / "sprites" / "front.png")
+    _write_tiny_png(tmp_path / "sprites" / "side.png")
+    walk = tmp_path / "sprites" / "walk"
+    for i in range(1, 9):
+        _write_tiny_png(walk / f"{i:02d}.png", 0xFF000000 + i)
+    pet = PetWidget(assets_root=tmp_path)
+    pet.resize(100, 100)
+    pet.set_motion(True, 20.0)
+    assert pet._sprite_mode == "walk"
+    pet._step_walk_phase(1.0)
+    slow = pet._walk_phase
+    pet._walk_phase = 0.0
+    pet._speed = 60.0
+    pet._step_walk_phase(0.1)
+    fast_short = pet._walk_phase
+    assert slow > 0.0 and fast_short > 0.0
+    assert fast_short * 10 > slow  # faster ground speed → faster cycle
+
+
+def test_shipped_walk_cycle_has_32_frames() -> None:
+    root = Path(__file__).resolve().parents[1] / "assets"
+    assert len(list_walk_frame_paths(root)) == 32

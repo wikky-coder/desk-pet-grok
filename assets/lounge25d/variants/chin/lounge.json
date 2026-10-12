@@ -1,0 +1,76 @@
+{
+ "fw": 720,
+ "fh": 628,
+ "cols": 4,
+ "breath_frames": 1,
+ "breath": "runtime",
+ "poses": {
+  "base": {
+   "file": "lounge_base.webp",
+   "frames": 5
+  },
+  "half": {
+   "file": "lounge_half.webp",
+   "frames": 1
+  },
+  "sleep": {
+   "file": "lounge_sleep.webp",
+   "frames": 1
+  }
+ },
+ "scale": 0.34675615212527966,
+ "ledge_row": 628,
+ "canvas_ref": [
+  720,
+  940
+ ],
+ "variant": "chin",
+ "head_zone": [
+  171.71140939597313,
+  0.0,
+  720.0,
+  494.2908277404922
+ ],
+ "tail": {
+  "file": "lounge_tail.webp",
+  "box": [
+   58,
+   273,
+   190,
+   216
+  ],
+  "angles": [
+   -20,
+   -18,
+   -16,
+   -14,
+   -12,
+   -10,
+   -8,
+   -6,
+   -4,
+   -2,
+   0,
+   2,
+   4,
+   6,
+   8,
+   10,
+   12,
+   14,
+   16,
+   18,
+   20
+  ],
+  "cols": 7,
+  "gutter": 2,
+  "limits": [
+   -20,
+   20
+  ],
+  "pivot": [
+   173.79194630872482,
+   460.86353467561526
+  ]
+ }
+}

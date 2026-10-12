@@ -27,7 +27,7 @@ def qapp() -> QApplication:
 def test_pet_window_flags_and_default_size(qapp: QApplication, tmp_path) -> None:
     os.environ["DESK_PET_GROK_CONFIG_DIR"] = str(tmp_path)
     sm = StateMachine()
-    win = PetWindow(state_machine=sm, settings={})
+    win = PetWindow(state_machine=sm, settings={"puppet25d": False})
     flags = win.windowFlags()
     assert flags & Qt.WindowType.FramelessWindowHint
     assert flags & Qt.WindowType.WindowStaysOnTopHint
@@ -41,7 +41,7 @@ def test_pet_window_flags_and_default_size(qapp: QApplication, tmp_path) -> None
 def test_quiet_mode_updates_state(qapp: QApplication, tmp_path) -> None:
     os.environ["DESK_PET_GROK_CONFIG_DIR"] = str(tmp_path)
     sm = StateMachine()
-    win = PetWindow(state_machine=sm, settings={})
+    win = PetWindow(state_machine=sm, settings={"puppet25d": False})
     win.set_quiet(True)
     assert sm.state is PetState.sleep
     assert win.pet.state is PetState.sleep

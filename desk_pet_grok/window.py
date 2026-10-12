@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Callable
 
 from PySide6.QtCore import (
@@ -13,12 +15,20 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QColor, QCursor, QMouseEvent, QPainter
-from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from desk_pet_grok import config
+from desk_pet_grok import config, macwin
 from desk_pet_grok.motion import MotionController, MotionMode, parse_mode
+from desk_pet_grok import cling, powersave, petting, puppet, shake, workalong
+from desk_pet_grok.dbglog import CalibrationLog
+from desk_pet_grok.interaction import PAT_SAY_COOLDOWN_S, InteractionMixin  # noqa: F401
+from desk_pet_grok.lounge_driver import LoungeDriver
+from desk_pet_grok.mood import MoodMachine
+from desk_pet_grok.motion_driver import _PUPPET_FPS, MotionMixin  # noqa: F401
 from desk_pet_grok.pet import PetWidget
+from desk_pet_grok.pointer import _DRAG_THRESHOLD_PX, PointerMixin  # noqa: F401
+from desk_pet_grok.pet25d import Pet25D, available as puppet_available
 from desk_pet_grok.state import StateMachine
 
 DEFAULT_HEIGHT = 220
@@ -26,13 +36,14 @@ MIN_HEIGHT = 140
 MAX_HEIGHT = 360
 _CANVAS_W = 412
 _CANVAS_H = 344
-_DRAG_THRESHOLD_PX = 4
 _MOTION_INTERVAL_MS = 33
+_KEEPVIS_INTERVAL_MS = 4000
 _CLICK_DELAY_MS = 260
 _JUMP_PX = 12
 _JUMP_MS = 280
 
 PRODUCT_TITLE = "桌宠grok"
+log = logging.getLogger("desk_pet_grok")
 
 
 def clamp_window_height(height: int | float) -> int:
@@ -47,12 +58,13 @@ def size_for_height(height: int | float) -> tuple[int, int]:
     return w, h
 
 
-class PetWindow(QWidget):
+class PetWindow(PointerMixin, InteractionMixin, MotionMixin, QWidget):
     """Always-on-top frameless pet host."""
 
     chat_requested = Signal()
     pet_clicked = Signal()
     drag_finished = Signal()
+    lounge_say = Signal(str)  # category of a line to say (lounge_*, pet_head, pet_fall)
 
     def __init__(
         self,
@@ -77,23 +89,75 @@ class PetWindow(QWidget):
         self._click_timer.timeout.connect(self._emit_pet_clicked)
         self._jump_anim: QPropertyAnimation | None = None
 
+        use25 = self._settings.get("puppet25d", True) and puppet_available()
+        self._puppet = bool(use25)
+        self._drag_vx = 0.0
+        self._last_drag_x: int | None = None
+        self._persist_timer = QTimer(self)
+        self._persist_timer.setSingleShot(True)
+        self._persist_timer.setInterval(1500)
+        self._persist_timer.timeout.connect(self._persist_geometry)
+
         mode = parse_mode(self._settings.get("motion_mode", "wander"))
+        if mode is MotionMode.follow:
+            # legacy "look at mouse" mode: she stays put (still) and the passive eye-follow takes over
+            mode = MotionMode.still
+            self._settings["motion_mode"] = mode.value
+            self._settings["look_at_mouse"] = True
+            config.save_settings({"motion_mode": mode.value, "look_at_mouse": True})
+        self._look_at_mouse = bool(self._settings.get("look_at_mouse", True))
+        self._petting_on = bool(self._settings.get("petting", True))
+        self._anger = shake.AngerMachine(enabled=bool(self._settings.get('shake_anger', False)))
+        self._anger_last = time.monotonic()
+        self._cling = cling.ClingMachine(enabled=bool(self._settings.get('cling_edge', False)))
+        self._cling_said_peek = False
+        self._work = workalong.WorkAlong(enabled=bool(self._settings.get('work_along', False)))
+        self._work_poller = None
+        self._power = powersave.PowerSaver(enabled=bool(self._settings.get('power_save', False)))
+        self._mood = MoodMachine(enabled=bool(self._settings.get("mood", False)))
+        self._mood_last = time.monotonic()
+        self._calib = CalibrationLog()
+        self._calib.enabled = bool(self._settings.get("calibration_log", False))
+        self._pat_det_lie = petting.LyingPettingDetector(
+            str(self._settings.get("petting_level", "mid")),
+            overrides=self._settings.get("petting_params"),
+            on_event=lambda kind, **kw: self._calib.log(kind, lying=True, **kw),
+        )
+        self._pat_det_anger = petting.LyingPettingDetector(str(self._settings.get("petting_level", "mid")), overrides=self._settings.get("petting_params"))
+        self._pat_det = petting.PettingDetector(
+            str(self._settings.get("petting_level", "mid")),
+            overrides=self._settings.get("petting_params"),
+            on_event=self._calib.log,
+        )
+        self._pat_now = False
+        self._pat_last_say = -1e9
         self._motion = MotionController(mode=mode)
+        self._motion.flat = self._puppet
 
         self.setWindowTitle(PRODUCT_TITLE)
+        # Never steal keyboard focus from the app the user is typing in (macOS: non-activating panel).
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)  # Tool windows stay when the app is inactive
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAutoFillBackground(False)
 
-        self._pet = PetWidget(self)
+        self._pet = Pet25D(self) if self._puppet else PetWidget(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._pet)
+        if self._puppet:
+            self._init_rig()
+
+        if self._puppet:
+            self._pet.set_gaze_enabled(self._look_at_mouse)  # type: ignore[union-attr]
 
         height = self._settings.get("window_height") or DEFAULT_HEIGHT
         self.apply_height(int(height), persist=False)
@@ -108,12 +172,66 @@ class PetWindow(QWidget):
 
         self._context_menu_builder: Callable[[], object] | None = None
 
+        # Gentle keep-visible: only acts when the window is covered/hidden; never raise_()/activateWindow().
+        self._keepvis_timer = QTimer(self)
+        self._keepvis_timer.setInterval(_KEEPVIS_INTERVAL_MS)
+        self._keepvis_timer.timeout.connect(self._keep_visible)
+        self._keepvis_timer.start()
+
+        if self._puppet and hasattr(self._pet, "set_mood_enabled"):
+            self._pet.set_mood_enabled(self._mood.enabled)
+        if self._puppet and hasattr(self._pet, "set_tail_boost"):
+            self._pet.set_tail_boost(bool(self._settings.get("tail_boost", True)))
+        if self._puppet and hasattr(self._pet, "set_lounge_variants"):
+            self._pet.set_lounge_variants(bool(self._settings.get("lounge_variants", False)))
+        if self._puppet and hasattr(self._pet, "set_variant_interval"):
+            iv = self._settings.get("lounge_variant_interval", [40, 120])
+            iv = iv if isinstance(iv, (list, tuple)) and len(iv) == 2 else (None, None)
+            self._pet.set_variant_interval(*iv)
+        self._lounge = LoungeDriver(self)
+        self._lounge.say.connect(self.lounge_say)
+        self.lounge_say.connect(self._mood_on_say)
+        self._lounge.lounge.on_event = self._calib.log
+        for key, attr in (("lounge_fall_gap", "fall_gap"), ("lounge_fall_follow", "fall_follow")):
+            try:
+                if self._settings.get(key) is not None:
+                    setattr(self._lounge.lounge, attr, float(self._settings[key]))
+            except (TypeError, ValueError):
+                pass
+        self._lounge.set_selfwalk(bool(self._settings.get("lounge_selfwalk", True)))
+        self._lounge.dock_enabled = bool(self._settings.get("lounge_dock", True))
+        try:
+            self._lounge.dock_tol = float(self._settings.get("lounge_dock_tol", 40.0))
+        except (TypeError, ValueError):
+            pass
+        self._apply_lounge_probe(bool(self._settings.get("lounge_ax", False)), prompt=False)
+        if self._puppet and self._settings.get("lounge", False):
+            self.set_lounge(True, persist=False)
+
         self._motion_clock = QElapsedTimer()
         self._motion_clock.start()
         self._motion_timer = QTimer(self)
         self._motion_timer.setInterval(_MOTION_INTERVAL_MS)
         self._motion_timer.timeout.connect(self._on_motion_tick)
         self._motion_timer.start()
+
+    def _rig_choice(self, key: str) -> bool:
+        """Explicit user choice wins; never chosen -> follow ``rig_auto`` (default off, so defaults are unchanged)."""
+        v = self._settings.get(key)
+        return bool(v) if v is not None else bool(self._settings.get("rig_auto", False))
+
+    def _init_rig(self) -> None:
+        want_rig, want_turn = self._rig_choice("part_rig"), self._rig_choice("part_turn")
+        if not want_rig:
+            return
+        if not self.part_rig_available():
+            log.warning("part rig requested but assets are missing; using pre-rendered sheets")
+            return
+        if not self._pet.set_part_rig(True):  # type: ignore[union-attr]
+            log.warning("part rig failed to load; using pre-rendered sheets")
+            return
+        if want_turn:
+            self._pet.set_part_turn(True)  # type: ignore[union-attr]
 
     @property
     def state_machine(self) -> StateMachine:
@@ -152,14 +270,24 @@ class PetWindow(QWidget):
         self._chat_open_checker = checker
 
     def set_motion_mode(self, mode: MotionMode | str, *, persist: bool = True) -> None:
+        if parse_mode(mode) is MotionMode.follow:  # legacy value: stay put + eyes follow
+            mode = MotionMode.still
+            self.set_look_at_mouse(True, persist=persist)
         self._motion.set_mode(mode)
         if persist:
             value = self._motion.mode.value
             self._settings["motion_mode"] = value
             config.save_settings({"motion_mode": value})
 
+    # ---- passive eye-follow and head-pat ----
+
+
+    @property
+    def puppet_mode(self) -> bool:
+        return self._puppet
+
     def apply_height(self, height: int, *, persist: bool = True) -> None:
-        w, h = size_for_height(height)
+        w, h = puppet.size_for_height(height) if self._puppet else size_for_height(height)
         self.resize(w, h)
         if persist:
             self._persist_geometry()
@@ -173,6 +301,7 @@ class PetWindow(QWidget):
         if persist:
             self._settings["quiet"] = quiet
             config.save_settings({"quiet": quiet})
+
 
     def set_penetrate(self, enabled: bool, *, persist: bool = True) -> None:
         self._penetrate = enabled
@@ -193,12 +322,15 @@ class PetWindow(QWidget):
         flags = (
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         if enabled:
             flags |= Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
         self.setAutoFillBackground(False)
         if self._penetrate:
             self.setAttribute(
@@ -213,13 +345,20 @@ class PetWindow(QWidget):
             self._settings["bubble_visible"] = visible
             config.save_settings({"bubble_visible": visible})
 
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        macwin.apply(self, on_top=self._always_on_top)
+
+    def _keep_visible(self) -> None:
+        macwin.reassert(self, on_top=self._always_on_top)
+
     def raise_and_activate(self) -> None:
         if self._penetrate:
             # Keep penetrate; still try to surface the window.
             pass
+        # Explicit tray click / second launch: show + raise only (WA_ShowWithoutActivating + DoesNotAcceptFocus keep keyboard focus elsewhere).
         self.show()
         self.raise_()
-        self.activateWindow()
 
     def play_reaction(self) -> None:
         """Schedule single-click reaction (deferred so double-click can cancel)."""
@@ -228,6 +367,8 @@ class PetWindow(QWidget):
     def play_jump(self) -> None:
         """Tiny vertical bob for click feedback (window + sprite procedural)."""
         self._pet.play_jump()
+        if self._puppet:
+            return  # puppet hops inside its own canvas
         if self._jump_anim is not None and self._jump_anim.state() == QPropertyAnimation.State.Running:
             return
         start = self.pos()
@@ -261,133 +402,6 @@ class PetWindow(QWidget):
         except Exception:
             return False
 
-    def _motion_paused(self) -> bool:
-        """Pause auto-move when penetrating or chat panel is open."""
-        return self._penetrate or self._chat_open()
-
-    def _screen_rect(self) -> tuple[float, float, float, float]:
-        screen = self.screen()
-        if screen is None:
-            screen = QApplication.primaryScreen()
-        if screen is None:
-            return (0.0, 0.0, 1920.0, 1080.0)
-        geo = screen.availableGeometry()
-        return (float(geo.x()), float(geo.y()), float(geo.width()), float(geo.height()))
-
-    def _on_motion_tick(self) -> None:
-        elapsed_ms = self._motion_clock.restart()
-        dt = max(0.001, min(elapsed_ms / 1000.0, 0.1))
-        dragging = self._drag_origin is not None and self._drag_moved
-
-        if self._motion_paused() and not dragging:
-            self._pet.set_motion(False, 0.0)
-            return
-
-        cursor = QCursor.pos()
-        new_x, new_y, facing = self._motion.tick(
-            dt,
-            (float(self.x()), float(self.y())),
-            (float(self.width()), float(self.height())),
-            self._screen_rect(),
-            (float(cursor.x()), float(cursor.y())),
-            dragging,
-        )
-        self._pet.set_facing(facing)
-        speed = (self._motion.vx ** 2 + self._motion.vy ** 2) ** 0.5
-        # Lower threshold so walk cycle / side sprite engage during ease-in.
-        moving = (not dragging) and speed >= 5.0 and not self._motion_paused()
-        if dragging:
-            # Dragging still counts as "moving" for side sprite / walk bob.
-            moving = self._drag_moved
-            if self._press_global is not None:
-                # Approximate drag speed from last move is unavailable; match cruise.
-                speed = 65.0 if moving else 0.0
-        self._pet.set_motion(moving, speed)
-        if not dragging:
-            ix, iy = int(round(new_x)), int(round(new_y))
-            if ix != self.x() or iy != self.y():
-                self.move(ix, iy)
-            elif not moving:
-                self._pet.set_motion(False, 0.0)
-
-    def _restore_position(self) -> None:
-        x = self._settings.get("window_x")
-        y = self._settings.get("window_y")
-        if isinstance(x, int) and isinstance(y, int):
-            self.move(x, y)
-
-    def _persist_geometry(self) -> None:
-        geo = {
-            "window_x": self.x(),
-            "window_y": self.y(),
-            "window_width": self.width(),
-            "window_height": self.height(),
-        }
-        self._settings.update(geo)
-        config.save_settings(geo)
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_origin = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            self._press_global = event.globalPosition().toPoint()
-            self._drag_moved = False
-            event.accept()
-            return
-        if event.button() == Qt.MouseButton.RightButton:
-            self._show_context_menu(event.globalPosition().toPoint())
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if (
-            self._drag_origin is not None
-            and event.buttons() & Qt.MouseButton.LeftButton
-        ):
-            if self._press_global is not None:
-                delta = event.globalPosition().toPoint() - self._press_global
-                if abs(delta.x()) + abs(delta.y()) >= _DRAG_THRESHOLD_PX:
-                    self._drag_moved = True
-            if self._drag_moved:
-                new_pos = event.globalPosition().toPoint() - self._drag_origin
-                dx = new_pos.x() - self.x()
-                if abs(dx) >= 1:
-                    facing = 1 if dx > 0 else -1
-                    self._motion.facing = facing
-                    self._pet.set_facing(facing)
-                self.move(new_pos)
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton:
-            if self._drag_origin is not None and self._drag_moved:
-                self._persist_geometry()
-                self.drag_finished.emit()
-            elif self._drag_origin is not None and not self._drag_moved:
-                self.play_reaction()
-            self._drag_origin = None
-            self._press_global = None
-            self._drag_moved = False
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._cancel_pending_click()
-            self.chat_requested.emit()
-            event.accept()
-            return
-        super().mouseDoubleClickEvent(event)
-
-    def _show_context_menu(self, global_pos: QPoint) -> None:
-        if self._context_menu_builder is None:
-            return
-        menu = self._context_menu_builder()
-        if menu is not None:
-            menu.exec(global_pos)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         """Erase the top-level translucent buffer (Source replace, not Clear).

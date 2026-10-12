@@ -1,0 +1,26 @@
+{
+ "fw": 720,
+ "fh": 462,
+ "cols": 4,
+ "breath_frames": 1,
+ "breath": "runtime",
+ "poses": {
+  "base": {
+   "file": "lounge_base.webp",
+   "frames": 1
+  }
+ },
+ "scale": 0.34675615212527966,
+ "ledge_row": 462,
+ "canvas_ref": [
+  720,
+  940
+ ],
+ "variant": "curl",
+ "head_zone": [
+  300.3232662192394,
+  0.0,
+  720.0,
+  415.6040268456376
+ ]
+}

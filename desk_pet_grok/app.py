@@ -8,14 +8,16 @@ from pathlib import Path
 from PySide6.QtCore import QByteArray, Qt
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QWidget
+from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon, QWidget
 
 from desk_pet_grok import autostart, config
 from desk_pet_grok.about import show_about
 from desk_pet_grok.bubble import BubbleWidget
+from desk_pet_grok.meow import ensure_meow
 from desk_pet_grok.chat import ChatController, prompt_and_save_api_key
 from desk_pet_grok.chat_panel import ChatPanel
 from desk_pet_grok.menu import PetMenuCallbacks, build_pet_menu
+from desk_pet_grok.screen_glue import ScreenController, populate_screen_menu
 from desk_pet_grok.state import StateMachine
 from desk_pet_grok.sysmon import SysMon
 from desk_pet_grok.window import PRODUCT_TITLE, PetWindow
@@ -84,6 +86,7 @@ def _build_callbacks(
     app: QApplication,
     chat: ChatController,
     sysmon: SysMon | None = None,
+    screen=None,
 ) -> PetMenuCallbacks:
 
     def _set_autostart(enabled: bool) -> None:
@@ -96,6 +99,7 @@ def _build_callbacks(
 
     def quit_app() -> None:
         chat.stop_stream()
+        chat.flush_memory()
         if sysmon is not None:
             sysmon.stop()
         window.close()
@@ -127,6 +131,46 @@ def _build_callbacks(
         ),
         set_autostart=lambda enabled: _set_autostart(enabled),
         quit_app=quit_app,
+        is_part_rig=lambda: window.part_rig,
+        set_part_rig=lambda enabled: window.set_part_rig(enabled),
+        part_rig_available=lambda: window.part_rig_available(),
+        is_part_turn=lambda: window.part_turn,
+        set_part_turn=lambda enabled: window.set_part_turn(enabled),
+        is_lounge=lambda: window.lounge,
+        set_lounge=lambda enabled: window.set_lounge(enabled),
+        is_lounge_dock=lambda: window.lounge_dock,
+        set_lounge_dock=lambda enabled: window.set_lounge_dock(enabled),
+        is_lounge_selfwalk=lambda: window.lounge_selfwalk,
+        set_lounge_selfwalk=lambda enabled: window.set_lounge_selfwalk(enabled),
+        is_lounge_ax=lambda: window.lounge_ax,
+        set_lounge_ax=lambda enabled: window.set_lounge_ax(enabled),
+        is_look_at_mouse=lambda: window.look_at_mouse,
+        set_look_at_mouse=lambda enabled: window.set_look_at_mouse(enabled),
+        is_petting=lambda: window.petting_enabled,
+        set_petting=lambda enabled: window.set_petting_enabled(enabled),
+        get_petting_level=lambda: window.petting_level,
+        set_petting_level=lambda level: window.set_petting_level(level),
+        is_proactive=lambda: chat.proactive_talk,
+        set_proactive=lambda enabled: chat.set_proactive_talk(enabled),
+        is_proactive_v2=lambda: chat.proactive_v2,
+        set_proactive_v2=lambda enabled: chat.set_proactive_v2(enabled),
+        is_memory=lambda: chat.memory_on,
+        set_memory=lambda enabled: chat.set_memory_on(enabled),
+        view_memory=lambda: QMessageBox.information(window, "记忆", chat.memory_text()),
+        clear_memory=lambda: (
+            chat.clear_memory()
+            if QMessageBox.question(window, "清除记忆", "确定清除全部记忆吗？") == QMessageBox.StandardButton.Yes
+            else None
+        ),
+        is_tail_boost=lambda: window.tail_boost,
+        set_tail_boost=lambda enabled: window.set_tail_boost(enabled),
+        is_lounge_variants=lambda: window.lounge_variants,
+        set_lounge_variants=lambda enabled: window.set_lounge_variants(enabled),
+        is_mood=lambda: window.mood_enabled,
+        set_mood=lambda enabled: window.set_mood_enabled(enabled),
+        is_calibration_log=lambda: window.calibration_log,
+        set_calibration_log=lambda enabled: window.set_calibration_log(enabled),
+        screen_menu=(lambda m: populate_screen_menu(m, screen)) if screen is not None else None,
     )
 
 
@@ -159,9 +203,9 @@ def main() -> int:
     def _on_sysmon_alert(message: str) -> None:
         if sm.quiet:
             return
-        if not window.bubble_visible:
+        if not window.bubble_visible or not window.isVisible():
             return
-        bubble.show_text(message)
+        bubble.show_text(ensure_meow(message))
         bubble.reposition_above(window)
 
     sysmon = SysMon(quiet_checker=lambda: sm.quiet, parent=app)
@@ -169,7 +213,33 @@ def main() -> int:
     sysmon.start()
     app.aboutToQuit.connect(sysmon.stop)
 
-    callbacks = _build_callbacks(window, sm, app, chat, sysmon)
+    screen = ScreenController(window, chat, parent=app)
+    chat.screen_hook = screen.handle_chat_text
+    from desk_pet_grok import screen_mac
+
+    chat.mood_fn = window.mood_event
+    chat.front_app_fn = lambda: screen_mac.front_app_name() if screen.get("screen_aware") else None
+
+    callbacks = _build_callbacks(window, sm, app, chat, sysmon, screen)
+    from desk_pet_grok.v4wire import V4
+
+    v4 = V4(window, app, chat, bubble, panel, settings)
+    callbacks.extras = tuple(v4.extras())
+    panel_holder: list = []
+
+    def open_settings() -> None:
+        from desk_pet_grok import ax_probe
+        from desk_pet_grok.settings_panel import SettingsPanel, build_sections
+
+        if not panel_holder:
+            panel_holder.append(SettingsPanel(build_sections(
+                callbacks, ax_trusted=ax_probe.is_trusted, open_ax=ax_probe.open_accessibility_settings,
+                usage_label=screen.aware.usage_label, screen=screen)))
+        p = panel_holder[0]
+        p.show()
+        p.raise_()  # raise only; never activate (keeps the user's keyboard focus)
+
+    callbacks.open_settings = open_settings
 
     def make_menu(parent: QWidget | None = None):
         return build_pet_menu(parent or window, callbacks)
@@ -182,15 +252,22 @@ def main() -> int:
     tray.setContextMenu(make_menu(tray_host))
     tray.activated.connect(
         lambda reason: (
-            window.raise_and_activate()
+            (v4.vis.set_manual(False), window.raise_and_activate())
             if reason == QSystemTrayIcon.ActivationReason.Trigger
             else None
         )
     )
     tray.show()
 
-    guard.on_new_connection(window.raise_and_activate)
+    guard.on_new_connection(lambda: (v4.vis.set_manual(False), window.raise_and_activate()))
     window.show()
+    v4.start()
+    from desk_pet_grok import onboarding
+
+    if onboarding.should_onboard(settings):
+        guide = onboarding.OnboardingPanel(on_done=lambda: config.save_settings({"onboarded": True}))
+        app._onboarding = guide  # keep alive
+        guide.show()
     return app.exec()
 
 

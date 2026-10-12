@@ -1,6 +1,6 @@
 # Slim pass notes (2026-10-12)
 
-Pre-slim backup: `~/Desktop/desk-pet-grok-backup-pre-slim-20261012-1305.tgz`
+Pre-slim backup tarball kept outside the repo (not committed).
 
 ## Phase A — clutter
 - Removed all root `_bak_*` directories and scattered `*.bak*` files (incl. `assets/rig25d.bak`).
@@ -30,4 +30,4 @@ Default runtime is already `Pet25D` when available. Removing classic path needs 
 - Freed ~37 MB on disk (bak dirs/files + `__pycache__` + `assets/rig25d.bak`).
 - `pet25d.py` 1124 → 992 lines; new `pet25d_paint.py` 166 lines.
 - Tests: **708 passed** (ignored numpy-only: fallfix*, happyface, workhands, edgefit, tail).
-- Pre-slim backup tarball kept: `~/Desktop/desk-pet-grok-backup-pre-slim-20261012-1305.tgz` (220MB).
+- Pre-slim backup tarball kept outside the repo (~220MB, not committed).
